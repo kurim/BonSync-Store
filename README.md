@@ -17,6 +17,12 @@ Das genaue technische Format eines Moduls (Manifest-Felder, JS-Vertrag, Module-S
 [module-format.md](module-format.md) beschrieben — diese README erklärt den **Ablauf**, um ein
 eigenes Modul beizusteuern.
 
+![Store-Ansicht in der BonSync-App: installierbare Händler-Module als Kacheln, u.a. Fressnapf, LIDL, OBI, PENNY, REWE, ROSSMANN](docs/appstorescreenshot.png)
+
+*So sieht der Store in der BonSync-App aus (**Händler-Schnittstellen → Store**) — jede Kachel
+entspricht genau einem `<retailer>/`-Ordner in diesem Repository und wird aus dessen
+`manifest.yaml` generiert (Anzeigename, Login-Art, Version, Logo, Farbe).*
+
 ### Repository-Struktur
 
 ```
@@ -116,6 +122,12 @@ one-click installation under **Retailer Interfaces → Store**.
 The exact technical module format (manifest fields, JS contract, module SDK) is documented in
 [module-format.md](module-format.md) — this README explains the **process** for contributing your
 own module.
+
+![Store view in the BonSync app: installable retailer modules as tiles, including Fressnapf, LIDL, OBI, PENNY, REWE, ROSSMANN](docs/appstorescreenshot.png)
+
+*This is what the store looks like inside the BonSync app (**Retailer Interfaces → Store**) — each
+tile corresponds to exactly one `<retailer>/` folder in this repository and is generated from its
+`manifest.yaml` (display name, login type, version, logo, color).*
 
 ### Repository layout
 
