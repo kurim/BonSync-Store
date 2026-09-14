@@ -1,0 +1,15 @@
+manifestVersion: 1
+id: rossmann
+displayName: ROSSMANN
+version: 1.0.0
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: credentials
+author: Kurim
+description: Offizielles ROSSMANN-Modul (REST-Client, E-Mail/Passwort, Zwei-Stufen-Token).
+authDescription: "REST-Client · E-Mail/Passwort · Zwei-Stufen-Token"
+ui:
+  logo: logo.svg
+  color: "#c2185b"
+  chip: RO

@@ -1,0 +1,15 @@
+manifestVersion: 1
+id: lidl
+displayName: LIDL
+version: 1.0.0
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: oauth-pkce-manual
+author: Kurim
+description: Offizielles LIDL-Modul (REST-Client, OAuth 2.0 PKCE, Duende).
+authDescription: "REST-Client · OAuth 2.0 (PKCE, Duende)"
+ui:
+  logo: logo.svg
+  color: "#0050aa"
+  chip: LI

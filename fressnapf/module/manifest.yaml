@@ -1,0 +1,16 @@
+manifestVersion: 1
+id: fressnapf
+displayName: Fressnapf
+version: 1.0.6
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: oauth-pkce-manual
+author: Kurim
+description: Fressnapf/Maxi Zoo Modul (In-Store-Kassenbons, App-Backend-API, OAuth 2.0 PKCE via SAP CDC/Gigya).
+authDescription: "REST-Client · OAuth 2.0 (PKCE)"
+providesPdf: false
+ui:
+  logo: logo.png
+  color: "#196428"
+  chip: FN

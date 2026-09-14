@@ -1,0 +1,15 @@
+manifestVersion: 1
+id: obi
+displayName: OBI
+version: 1.0.1
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: credentials
+author: Kurim
+description: Offizielles OBI-Modul (REST-Client, E-Mail/Passwort, heyOBI-App-API).
+authDescription: "REST-Client · E-Mail/Passwort · heyOBI-App-API"
+ui:
+  logo: logo.png
+  color: "#EC6608"
+  chip: OBI

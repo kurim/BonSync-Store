@@ -1,0 +1,15 @@
+manifestVersion: 1
+id: penny
+displayName: PENNY
+version: 1.0.0
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: oauth-pkce-redirect
+author: Kurim
+description: Offizielles PENNY-Modul (REST-Client, OAuth 2.0 PKCE, Keycloak).
+authDescription: "REST-Client · OAuth 2.0 (PKCE, Keycloak)"
+ui:
+  logo: logo.svg
+  color: "#e2001a"
+  chip: PY

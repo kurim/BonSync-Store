@@ -1,0 +1,36 @@
+name: Build store packages
+
+# Baut bei jeder Änderung an main alle Modul-Zips + index.json neu und veröffentlicht sie als
+# Assets des rollierenden "latest"-Release -- BonSync liest von dort (siehe
+# https://github.com/kurim/BonSync-Store/releases/download/latest/index.json), nicht direkt aus
+# dem main-Branch, damit ein halb gepushter Zwischenstand nie live installierbar ist.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - run: npm run build
+
+      - name: latest-Release neu aufsetzen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* \
+            --title "BonSync Store (latest)" \
+            --notes "Automatisch aus main gebaut ($(date -u +%Y-%m-%dT%H:%M:%SZ)). Katalog: index.json."
