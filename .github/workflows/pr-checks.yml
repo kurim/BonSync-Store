@@ -1,0 +1,27 @@
+name: PR checks
+
+# Baut alle Module wie build-store.yml, aber schon *vor* dem Merge auf jedem Pull Request gegen
+# main -- ohne Release-Veröffentlichung. Der Job "build" hier ist als "Require status checks to
+# pass" im Branch-Ruleset für main eintragbar (Check-Name: "PR checks / build"), damit ein PR mit
+# kaputtem Modul (fehlerhaftes manifest.yaml, entry baut nicht, esbuild-Fehler, ...) gar nicht erst
+# gemerged werden kann.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - run: npm run build

@@ -49,10 +49,23 @@ function sha256(filePath) {
 	return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
+// id -> Ordnername des Moduls, das diese id zuerst belegt hat -- fängt Copy-Paste-Fehler beim
+// Anlegen eines neuen Modul-Ordners ab (id im Manifest nicht angepasst), bevor zwei Module sich
+// unter derselben id im Store-Katalog gegenseitig überschreiben würden.
+const seenIds = new Map();
+
 async function buildStoreEntry(dirName) {
 	const moduleSrcDir = join(rootDir, dirName, 'module');
 	const manifestText = readFileSync(join(moduleSrcDir, 'manifest.yaml'), 'utf8');
 	const manifest = parseYaml(manifestText);
+
+	const existingDir = seenIds.get(manifest.id);
+	if (existingDir) {
+		throw new Error(
+			`Doppelte Modul-id "${manifest.id}": sowohl "${existingDir}/module/manifest.yaml" als auch "${dirName}/module/manifest.yaml" verwenden diese id. Jede id muss repository-weit eindeutig sein (siehe module-format.md, Abschnitt 3).`
+		);
+	}
+	seenIds.set(manifest.id, dirName);
 
 	const moduleTmpDir = join(tmpDir, manifest.id);
 	rmSync(moduleTmpDir, { recursive: true, force: true });
