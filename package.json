@@ -2,6 +2,7 @@
   "name": "bonsync-store",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Katalog + Build-Pipeline für BonSync-Händler-Module (siehe module-format.md).",
   "scripts": {

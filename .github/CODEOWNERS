@@ -1,0 +1,8 @@
+# Module laufen ohne Sandboxing mit vollen Server-Rechten (siehe module-format.md, Abschnitt 1) --
+# die manuelle Review + Freigabe durch den Repo-Owner ist das einzige Sicherheits-Gate, bevor
+# etwas in main landet und damit im Store-Katalog gelistet wird (siehe README.md und
+# CONTRIBUTING.md). Damit GitHub das auch technisch erzwingt, muss in den Repo-Einstellungen unter
+# "Branch protection rules" für main zusätzlich "Require a pull request before merging" +
+# "Require review from Code Owners" aktiviert werden -- diese Datei allein blockiert noch nichts.
+
+* @kurim
