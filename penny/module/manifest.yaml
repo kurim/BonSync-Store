@@ -11,5 +11,5 @@ description: Offizielles PENNY-Modul (REST-Client, OAuth 2.0 PKCE, Keycloak).
 authDescription: "REST-Client · OAuth 2.0 (PKCE, Keycloak)"
 ui:
   logo: logo.svg
-  color: "#e2001a"
+  color: "#ffd100"
   chip: PY
