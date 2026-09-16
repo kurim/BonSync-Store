@@ -1,0 +1,18 @@
+manifestVersion: 1
+id: kaufland
+displayName: Kaufland
+version: 0.1.0
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: oauth-pkce-manual
+description: >-
+  Kaufland-Modul (cidaas OAuth 2.0 + PKCE, Acardo-CRM-Transaktionen). Reverse-engineered
+  aus der Android-APK per statischer Analyse -- NICHT gegen einen echten Account
+  getestet. Siehe api-kaufland.md fuer den vollen Vertrauensstand und offene Fragen,
+  bevor dieses Modul produktiv genutzt wird.
+authDescription: "REST-Client · OAuth 2.0 (PKCE, cidaas) · UNGETESTET"
+providesPdf: false
+ui:
+  color: "#e2001a"
+  chip: KL
