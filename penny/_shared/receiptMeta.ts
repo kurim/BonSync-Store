@@ -72,15 +72,45 @@ const TA_BELEG_NR = /^TA-Nr\.\s*(\d+)\s+Beleg-Nr\.\s*(\d+)/i;
 const MARKT_KASSE_BED = /^Markt:(\S+)\s+Kasse:(\S+)\s+Bed\.?:(\S+)/i;
 const BON_NR = /Bon-Nr\.?:(\d+)/i;
 const LOYALTY_BALANCE = new RegExp(`Aktuelles\\s+Bonus-Guthaben:\\s*${PRICE}\\s*EUR`, 'i');
-const LOYALTY_POINTS = /Sie\s+erhalten\s+\d+\s+Treuepunkt/i;
+// PENNY schreibt je nach Bon-Version "Sie erhalten 5 Treuepunkt(e)" oder "Du erhältst 3 Treuepunkt(e)".
+const LOYALTY_POINTS = /(?:Sie\s+erhalten|Du\s+erh[aä]ltst)\s+\d+\s+Treuepunkt/i;
+// Block am Bon-Ende ("Deine zusätzlichen Vorteile heute:" -> Zeilen "Label 0,40" -> "Summe 0,40"),
+// z. B. "Sonstige Vorteile 0,40". Getrennt vom Treuepunkt-Hinweis, weil es Vorteile in Euro sind.
+const BENEFITS_HEADER = /^Deine\s+zus[aä]tzlichen\s+Vorteile\b/i;
+const BENEFITS_ROW = new RegExp(`^(.+?)\\s+(${PRICE})$`);
+const BENEFITS_TOTAL = /^Summe$/i;
+const SEPARATOR_LINE = /^[-=_\s]+$/;
 
 export function parseReceiptMeta(lines: string[]): ReceiptMeta | null {
 	const meta: ReceiptMeta = { taxBreakdown: [] };
 	let pendingPaymentLabel: string | undefined;
+	let inBenefits = false;
+	const benefits: { label: string; amountCents: number }[] = [];
+	let benefitsTotalCents: number | undefined;
 
 	for (const rawLine of lines) {
 		const line = normalizeLine(rawLine);
 		if (!line) continue;
+
+		if (BENEFITS_HEADER.test(line)) {
+			inBenefits = true;
+			continue;
+		}
+		if (inBenefits) {
+			if (SEPARATOR_LINE.test(line)) continue;
+			const row = line.match(BENEFITS_ROW);
+			if (row) {
+				const amountCents = parseAmountToCents(row[2]);
+				if (BENEFITS_TOTAL.test(row[1].trim())) {
+					benefitsTotalCents = amountCents;
+					inBenefits = false;
+				} else {
+					benefits.push({ label: row[1].trim(), amountCents });
+				}
+				continue;
+			}
+			inBenefits = false; // Block endet (z. B. "Danke für deinen Einkauf")
+		}
 
 		const ustRewe = line.match(UST_ID_REWE);
 		if (ustRewe) {
@@ -181,6 +211,11 @@ export function parseReceiptMeta(lines: string[]): ReceiptMeta | null {
 		}
 	}
 
+	if (benefits.length > 0) {
+		meta.extraBenefits = benefits;
+		meta.extraBenefitsCents = benefitsTotalCents ?? benefits.reduce((sum, b) => sum + b.amountCents, 0);
+	}
+
 	return hasReceiptMeta(meta) ? meta : null;
 }
 
@@ -195,6 +230,7 @@ function hasReceiptMeta(meta: ReceiptMeta): boolean {
 			meta.taxBreakdown.length > 0 ||
 			meta.tseSignaturzaehler ||
 			meta.loyaltyNote ||
-			meta.loyaltyEarnedCents != null
+			meta.loyaltyEarnedCents != null ||
+			meta.extraBenefitsCents != null
 	);
 }
