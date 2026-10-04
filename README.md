@@ -15,7 +15,7 @@ OAuth 2.0 mit PKCE; der Redirect ist eine normale https-URL (`oauth-pkce-redirec
 - Belegliste und Beleg-PDF
 - Artikel und Ersparnis (Coupons) aus dem PDF
 - Marktdaten über die Marktnummer auf dem Beleg
-- Belegmetadaten (`fetchReceiptMeta`): TSE, Zahlungsart, MwSt.-Aufschlüsselung, Bonus-/Treuepunkte-Zeile
+- Belegmetadaten (`fetchReceiptMeta`): TSE, Zahlungsart, MwSt.-Aufschlüsselung, Treuepunkte-Zeile, zusätzliche Vorteile am Bon-Ende
 
 ## Dateien
 
