@@ -267,35 +267,48 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 			}));
 	}
 
-	/** Wochenangebote je Markt (Kategorien -> offers[]). Das Antwortformat ist von ha-rewe
-	 * übernommen und variiert je Markt (Titel mal in `title`, mal in `subtitle`, Preis als Text oder
-	 * Cent) -- das Parsing ist deshalb bewusst defensiv, unbrauchbare Einträge werden übersprungen. */
+	/** Wochenangebote je Markt (Kategorien -> offers[]), aktuelle UND nächste Woche: REWE
+	 * veröffentlicht die nächste Woche ab Samstag, und sonntags ist `current` bereits abgelaufen --
+	 * ohne `next` bliebe die Liste dann leer. Das Antwortformat ist von ha-rewe übernommen und
+	 * variiert je Markt (Titel mal in `title`, mal in `subtitle`, Preis als Text oder Cent), das
+	 * Parsing ist deshalb defensiv. Liefert die Antwort Einträge, aus denen kein einziges Angebot
+	 * entsteht, oder fehlt die erwartete Struktur ganz, wirft die Methode mit einer Beschreibung
+	 * der tatsächlichen Antwort -- BonSync zeigt den Fehler an, statt stumm eine leere Liste zu
+	 * speichern. */
 	async function fetchOffers(_creds: StoredCredentials | null, markets: MarketRef[]): Promise<Offer[]> {
 		type Raw = Record<string, any>;
 		const byKey = new Map<string, Offer>();
-		for (const market of markets) {
-			const json = await apiGet<{ data?: { offers?: { current?: Raw } } }>(`/api/stationary-offers/${encodeURIComponent(market.id)}`);
-			const current = json.data?.offers?.current;
-			const weekEnd = toEpoch(current?.untilDate);
-			for (const category of (current?.categories ?? []) as Raw[]) {
+
+		const parseWeek = (week: Raw | undefined, marketId: string, validFrom: number | undefined, stats: { items: number; noTitle: number; noPrice: number; sample?: string }) => {
+			const weekEnd = toEpoch(week?.untilDate);
+			for (const category of (week?.categories ?? []) as Raw[]) {
 				for (const item of (category.offers ?? []) as Raw[]) {
 					if (item.cellType === 'MOOD') continue;
+					stats.items++;
 					const product: Raw | null = item.product && typeof item.product === 'object' ? item.product : null;
 					let title = clean(product?.title ?? item.title);
 					let subtitle = clean(item.subtitle);
 					if (!title && subtitle) [title, subtitle] = [subtitle, title];
-					if (!title) continue;
+					if (!title) {
+						stats.noTitle++;
+						stats.sample ??= Object.keys(item).join(',');
+						continue;
+					}
 
 					const pd: Raw = item.priceData && typeof item.priceData === 'object' ? item.priceData : {};
 					const priceCents =
 						toCents(pd.price) ?? toCents(pd.formattedPrice) ?? toCents(pd.regularPrice) ?? toCents(product?.listing?.currentRetailPrice) ?? toCents(item.price);
-					if (priceCents == null) continue;
+					if (priceCents == null) {
+						stats.noPrice++;
+						stats.sample ??= `${Object.keys(item).join(',')} priceData=${JSON.stringify(item.priceData)?.slice(0, 120)}`;
+						continue;
+					}
 
 					const image = (Array.isArray(item.images) ? item.images[0] : undefined) ?? item.imageURL ?? product?.imageURL;
 					const id = String(item.id ?? item.offerId ?? product?.id ?? `${category.title ?? ''}|${title}|${subtitle}`);
 					const existing = byKey.get(id);
 					if (existing) {
-						if (!existing.marketIds!.includes(market.id)) existing.marketIds!.push(market.id);
+						if (!existing.marketIds!.includes(marketId)) existing.marketIds!.push(marketId);
 						continue;
 					}
 					byKey.set(id, {
@@ -303,11 +316,31 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 						title,
 						priceCents,
 						unitPriceText: subtitle || undefined,
+						validFrom,
 						validTo: toEpoch(item.validUntil ?? item.untilDate) ?? weekEnd,
 						imageUrl: image ? String(image) : undefined,
-						marketIds: [market.id]
+						marketIds: [marketId]
 					});
 				}
+			}
+		};
+
+		for (const market of markets) {
+			const json = await apiGet<{ data?: { offers?: { current?: Raw; next?: Raw } }; errors?: unknown }>(`/api/stationary-offers/${encodeURIComponent(market.id)}`);
+			const offers = json?.data?.offers;
+			if (!offers) {
+				throw new Error(
+					`REWE-Angebote für Markt ${market.id}: unerwartete Antwort (Schlüssel: ${Object.keys(json ?? {}).join(', ') || 'keine'}${json?.data ? `, data: ${Object.keys(json.data).join(', ')}` : ''}${json?.errors ? `, errors: ${JSON.stringify(json.errors).slice(0, 200)}` : ''})`
+				);
+			}
+			const stats = { items: 0, noTitle: 0, noPrice: 0, sample: undefined as string | undefined };
+			const currentEnd = toEpoch(offers.current?.untilDate);
+			parseWeek(offers.current, market.id, undefined, stats);
+			parseWeek(offers.next, market.id, currentEnd ? currentEnd + 1 : undefined, stats);
+			if (stats.items > 0 && stats.noTitle + stats.noPrice === stats.items) {
+				throw new Error(
+					`REWE-Angebote für Markt ${market.id}: ${stats.items} Einträge, aber keiner mit ${stats.noTitle > 0 ? 'Titel' : 'Preis'} lesbar (${stats.noTitle} ohne Titel, ${stats.noPrice} ohne Preis; Beispiel: ${stats.sample ?? '-'})`
+				);
 			}
 		}
 		return [...byKey.values()];
