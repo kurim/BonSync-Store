@@ -1,0 +1,23 @@
+manifestVersion: 1
+id: dm
+displayName: dm
+version: 0.1.0
+entry: index.js
+sdkVersion: 1
+loginStrategy:
+  kind: credentials
+author: Kurim (reverse-engineert, siehe api-dm.md)
+description: >
+  dm-Modul (eBons). ACHTUNG - kein "install-and-forget"-Modul: dm hat keinen
+  automatisierbaren Login (native App: Geraete-Attestierung; Web: reCAPTCHA Enterprise;
+  Session-Cookie-Replay fuer stillen Re-Login live getestet und schlaegt fehl, vermutlich
+  Fingerprint-Bindung) und stellt kein refresh_token aus - das access_token ist nur ca.
+  150 Sekunden gueltig. Vor JEDEM Sync muss ein frisches access_token aus einem
+  eingeloggten Browser-Tab (DevTools -> Authorization-Header) manuell eingefuegt werden.
+  Siehe api-dm.md im gleichen Verzeichnis fuer Details.
+authDescription: "REST-Client · manuelles Access-Token (~150s gültig, kein Auto-Refresh)"
+providesPdf: true
+ui:
+  logo: logo.png
+  color: "#e00818"
+  chip: DM
