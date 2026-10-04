@@ -66,10 +66,11 @@ beschrieben — bei Widersprüchen zwischen dieser Datei und `module-format.md` 
 - Dies ist ein Hobby-Projekt ohne festes SLA für Review-Zeiten.
 - Ein offener PR hat keinerlei Auswirkung auf den ausgelieferten Store-Katalog — erst der Merge
   nach `main` löst den Build und die Veröffentlichung im `latest`-Release aus.
-- Maintainer-Ablauf für Modul-Branches: Änderungen an einem Modul entstehen auf `modul/<id>`. Ein Push
-  dort übernimmt per Workflow [`modul-to-dev.yml`](.github/workflows/modul-to-dev.yml) nur den Ordner
-  `<id>/` nach `dev` (ein normaler Merge würde alles andere löschen, weil `modul/*` nur das Modul
-  enthält). Veröffentlicht wird per Pull Request `dev` → `main`.
+- Maintainer-Ablauf für Modul-Branches: Änderungen an einem Modul entstehen auf `modul/<id>`. Der
+  Workflow [`modul-to-dev.yml`](.github/workflows/modul-to-dev.yml) (Actions → „Modul nach dev“ →
+  Run workflow, Standard „alle“) übernimmt nur den Ordner `<id>/` nach `dev` (ein normaler Merge würde
+  alles andere löschen, weil `modul/*` nur das Modul enthält). Veröffentlicht wird per Pull Request
+  `dev` → `main`.
 
 ### Verhalten
 
