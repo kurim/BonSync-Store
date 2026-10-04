@@ -7,7 +7,7 @@
  * siehe ../lidl/parser.ts) bringen ihre eigene, private Erkennungslogik mit statt diese Datei zu
  * importieren -- siehe docs/module-format.md. */
 
-import type { ReceiptItem, ReceiptSavings } from '../../src/lib/server/modules/types';
+import type { ReceiptItem, ReceiptMeta, ReceiptSavings } from '../../src/lib/server/modules/types';
 
 function parseAmountToCents(raw: string): number {
 	const normalized = raw.replace(/\./g, '').replace(',', '.');
@@ -185,4 +185,46 @@ export function parseSavings(lines: string[]): ReceiptSavings {
 	}
 
 	return { totalSavingsCents, coupons };
+}
+
+const LOYALTY_EARNED = new RegExp(`^Mit\\s+diesem\\s+Einkauf\\s+hast\\s+du\\s+(${PRICE})\\s*EUR`, 'i');
+const LOYALTY_EARNED_CONTINUATION = /Bonus-Guthaben\s+gesammelt:?$/i;
+const LOYALTY_BALANCE = new RegExp(`Aktuelles\\s+Bonus-Guthaben:\\s*${PRICE}\\s*EUR`, 'i');
+const LOYALTY_ENTRY = new RegExp(`^(.+?)\\s+(${PRICE})\\s*EUR$`, 'i');
+const LOYALTY_GROUP = /^Bonus-\S+$/i;
+
+/** Extrahiert den Block "Mit diesem Einkauf hast du X EUR REWE Bonus-Guthaben gesammelt" samt
+ * Aufschlüsselung ("Bonus-Aktion(en) 0,40 EUR", Gruppe "Bonus-Coupon(s)" + "10% auf ... 0,75 EUR"). */
+export function parseLoyalty(lines: string[]): Pick<ReceiptMeta, 'loyaltyEarnedCents' | 'loyaltyEarnedBreakdown'> | null {
+	let loyalty: { earnedCents: number; breakdown: NonNullable<ReceiptMeta['loyaltyEarnedBreakdown']> } | null = null;
+	let group: string | undefined;
+
+	for (const rawLine of lines) {
+		const line = normalizeLine(rawLine);
+		if (!line) continue;
+
+		if (!loyalty) {
+			const earned = line.match(LOYALTY_EARNED);
+			if (earned) loyalty = { earnedCents: parseAmountToCents(earned[1]), breakdown: [] };
+			continue;
+		}
+
+		if (LOYALTY_EARNED_CONTINUATION.test(line)) continue;
+		const entry = !LOYALTY_BALANCE.test(line) && line.match(LOYALTY_ENTRY);
+		if (entry) {
+			loyalty.breakdown.push({
+				...(group ? { group } : {}),
+				label: entry[1].trim(),
+				amountCents: parseAmountToCents(entry[2])
+			});
+			continue;
+		}
+		if (LOYALTY_GROUP.test(line)) {
+			group = line;
+			continue;
+		}
+		break;
+	}
+
+	return loyalty ? { loyaltyEarnedCents: loyalty.earnedCents, loyaltyEarnedBreakdown: loyalty.breakdown } : null;
 }
