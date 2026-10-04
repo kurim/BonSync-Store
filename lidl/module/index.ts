@@ -1,7 +1,8 @@
 import { htmlToLines } from './htmlToLines';
 import { parseReceiptItems, parseSavings } from './parser';
+import { parseReceiptMeta } from './receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { AuthorizeStart, ReceiptItem, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { AuthorizeStart, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // --- Konstanten aus docs/api-lidlplus.md ---
 const AUTHORIZE_ENDPOINT = 'https://accounts.lidl.com/connect/authorize';
@@ -206,6 +207,12 @@ export default function createLidlModule(sdk: ModuleSdk): StoreModule {
 		return parseSavings(htmlToLines(detail.htmlPrintedReceipt));
 	}
 
+	async function fetchReceiptMeta(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptMeta | null> {
+		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
+		if (!buffer) return null;
+		return parseReceiptMeta(await sdk.pdf.extractLines(buffer));
+	}
+
 	async function refreshMarketInfo(creds: StoredCredentials, externalId: string): Promise<ReceiptSummary['market']> {
 		const c = creds as LidlCredentials;
 		const detail = await fetchTicketDetail(c, externalId);
@@ -223,6 +230,7 @@ export default function createLidlModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptPdf,
 		fetchReceiptItems,
 		fetchReceiptSavings,
+		fetchReceiptMeta,
 		refreshMarketInfo
 	};
 }
