@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseReceiptItems, parseSavings, parseLoyalty, parseMarketHeader } from '../_shared/posParser';
 import { parseReceiptMeta } from '../_shared/receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { AuthorizeStart, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { AuthorizeStart, MarketRef, Offer, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // Verzeichnis dieser Datei zur Laufzeit (nach dem Bündeln z.B. ${DATA_DIR}/modules/rewe/) --
 // `import.meta.url` verweist bei einem dynamisch importierten ESM-Modul immer auf seine eigene
@@ -48,6 +48,28 @@ interface EbonsResponse {
 		};
 	};
 }
+
+/** Preis aus der Angebots-API in Cent: Zahlen gelten als Cent (wie `listing.currentRetailPrice`),
+ * Strings wie "1,99 €" werden geparst. */
+function toCents(v: unknown): number | undefined {
+	if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.round(v);
+	if (typeof v === 'string') {
+		const m = v.replace(/\s/g, '').match(/(\d+)(?:[.,](\d{1,2}))?/);
+		if (m) return parseInt(m[1], 10) * 100 + (m[2] ? parseInt(m[2].padEnd(2, '0'), 10) : 0);
+	}
+	return undefined;
+}
+
+function toEpoch(v: unknown): number | undefined {
+	if (typeof v === 'number') return v > 1e11 ? v : v * 1000;
+	if (typeof v === 'string' && v) {
+		const t = Date.parse(v);
+		return Number.isNaN(t) ? undefined : t;
+	}
+	return undefined;
+}
+
+const clean = (s: unknown) => String(s ?? '').replace(/[\n\u2028]/g, ' ').replace(/\s+/g, ' ').trim();
 
 export default function createReweModule(sdk: ModuleSdk): StoreModule {
 	let cachedTls: { cert: Buffer; key: Buffer } | null = null;
@@ -218,6 +240,79 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 		return { name: header.name, street: header.street, zipCode: header.zipCode, city: header.city };
 	}
 
+	async function apiGet<T>(path: string): Promise<T> {
+		const { status, json } = await sdk.http.requestJson<T>(`${API_BASE}${path}`, {
+			method: 'GET',
+			headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+			tls: mtlsOptions()
+		});
+		if (status !== 200) throw new Error(`REWE ${path.split('?')[0]} antwortete mit Status ${status}`);
+		return json;
+	}
+
+	/** Marktsuche (öffentlich, ohne Login; mTLS-Zertifikat reicht). Antwortform laut ha-rewe:
+	 * data.marketSearch.markets[] mit wwIdent/name/street/city/zipCode. */
+	async function searchMarkets(_creds: StoredCredentials | null, query: { zip?: string; text?: string }): Promise<MarketRef[]> {
+		const q = (query.zip ?? query.text ?? '').trim();
+		if (!q) return [];
+		const json = await apiGet<{ data?: { marketSearch?: { markets?: Record<string, unknown>[] } } }>(`/api/stationary-markets?search=${encodeURIComponent(q)}`);
+		return (json.data?.marketSearch?.markets ?? [])
+			.filter((m) => m.wwIdent)
+			.map((m) => ({
+				id: String(m.wwIdent),
+				name: m.name ? String(m.name) : undefined,
+				street: m.street ? String(m.street) : undefined,
+				zipCode: m.zipCode ? String(m.zipCode) : undefined,
+				city: m.city ? String(m.city) : undefined
+			}));
+	}
+
+	/** Wochenangebote je Markt (Kategorien -> offers[]). Das Antwortformat ist von ha-rewe
+	 * übernommen und variiert je Markt (Titel mal in `title`, mal in `subtitle`, Preis als Text oder
+	 * Cent) -- das Parsing ist deshalb bewusst defensiv, unbrauchbare Einträge werden übersprungen. */
+	async function fetchOffers(_creds: StoredCredentials | null, markets: MarketRef[]): Promise<Offer[]> {
+		type Raw = Record<string, any>;
+		const byKey = new Map<string, Offer>();
+		for (const market of markets) {
+			const json = await apiGet<{ data?: { offers?: { current?: Raw } } }>(`/api/stationary-offers/${encodeURIComponent(market.id)}`);
+			const current = json.data?.offers?.current;
+			const weekEnd = toEpoch(current?.untilDate);
+			for (const category of (current?.categories ?? []) as Raw[]) {
+				for (const item of (category.offers ?? []) as Raw[]) {
+					if (item.cellType === 'MOOD') continue;
+					const product: Raw | null = item.product && typeof item.product === 'object' ? item.product : null;
+					let title = clean(product?.title ?? item.title);
+					let subtitle = clean(item.subtitle);
+					if (!title && subtitle) [title, subtitle] = [subtitle, title];
+					if (!title) continue;
+
+					const pd: Raw = item.priceData && typeof item.priceData === 'object' ? item.priceData : {};
+					const priceCents =
+						toCents(pd.price) ?? toCents(pd.formattedPrice) ?? toCents(pd.regularPrice) ?? toCents(product?.listing?.currentRetailPrice) ?? toCents(item.price);
+					if (priceCents == null) continue;
+
+					const image = (Array.isArray(item.images) ? item.images[0] : undefined) ?? item.imageURL ?? product?.imageURL;
+					const id = String(item.id ?? item.offerId ?? product?.id ?? `${category.title ?? ''}|${title}|${subtitle}`);
+					const existing = byKey.get(id);
+					if (existing) {
+						if (!existing.marketIds!.includes(market.id)) existing.marketIds!.push(market.id);
+						continue;
+					}
+					byKey.set(id, {
+						externalId: id,
+						title,
+						priceCents,
+						unitPriceText: subtitle || undefined,
+						validTo: toEpoch(item.validUntil ?? item.untilDate) ?? weekEnd,
+						imageUrl: image ? String(image) : undefined,
+						marketIds: [market.id]
+					});
+				}
+			}
+		}
+		return [...byKey.values()];
+	}
+
 	return {
 		beginLogin,
 		completeLogin,
@@ -227,6 +322,8 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptItems,
 		fetchReceiptSavings,
 		fetchReceiptMeta,
-		refreshMarketInfo
+		refreshMarketInfo,
+		searchMarkets,
+		fetchOffers
 	};
 }
