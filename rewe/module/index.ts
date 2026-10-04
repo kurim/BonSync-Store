@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseReceiptItems, parseSavings, parseMarketHeader } from '../_shared/posParser';
+import { parseReceiptItems, parseSavings, parseLoyalty, parseMarketHeader } from '../_shared/posParser';
+import { parseReceiptMeta } from '../_shared/receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { AuthorizeStart, ReceiptItem, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { AuthorizeStart, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // Verzeichnis dieser Datei zur Laufzeit (nach dem Bündeln z.B. ${DATA_DIR}/modules/rewe/) --
 // `import.meta.url` verweist bei einem dynamisch importierten ESM-Modul immer auf seine eigene
@@ -198,6 +199,16 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 		return parseSavings(await sdk.pdf.extractLines(buffer));
 	}
 
+	async function fetchReceiptMeta(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptMeta | null> {
+		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
+		if (!buffer) return null;
+		const lines = await sdk.pdf.extractLines(buffer);
+		const meta = parseReceiptMeta(lines);
+		const loyalty = parseLoyalty(lines);
+		if (!meta && !loyalty) return null;
+		return { taxBreakdown: [], ...meta, ...loyalty };
+	}
+
 	async function refreshMarketInfo(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptSummary['market']> {
 		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
 		if (!buffer) return null;
@@ -215,6 +226,7 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptPdf,
 		fetchReceiptItems,
 		fetchReceiptSavings,
+		fetchReceiptMeta,
 		refreshMarketInfo
 	};
 }
