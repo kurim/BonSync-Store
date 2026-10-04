@@ -1,0 +1,63 @@
+name: Modul nach dev
+
+# Jeder Push auf einen Branch modul/<id> übernimmt den Ordner <id>/ nach dev. Die modul/*-Branches
+# enthalten nur ihren Modulordner (+ LICENSE/README); ein normaler Merge würde deshalb alles andere
+# in dev löschen. Der Workflow kopiert stattdessen gezielt nur <id>/ und committet das auf dev.
+# Anschließend geht es wie gewohnt per Pull Request dev -> main (dort laufen die PR checks).
+#
+# Manuell: Actions -> "Modul nach dev" -> Run workflow, Modul-ID eintragen (z. B. rewe).
+on:
+  push:
+    branches: ['modul/**']
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Modul-ID (Ordnername, z. B. rewe)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: modul-to-dev
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Modul-ID bestimmen
+        id: mod
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            id="${{ inputs.module }}"
+          else
+            id="${GITHUB_REF_NAME#modul/}"
+          fi
+          # Nur einfache Ordnernamen zulassen
+          [[ "$id" =~ ^[a-z0-9_-]+$ ]] || { echo "Ungültige Modul-ID: $id"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Ordner aus modul/<id> übernehmen
+        env:
+          ID: ${{ steps.mod.outputs.id }}
+        run: |
+          git fetch origin "modul/$ID"
+          git ls-tree -d --name-only "origin/modul/$ID" | grep -qx "$ID" \
+            || { echo "modul/$ID enthält keinen Ordner $ID/"; exit 1; }
+          git rm -rq --ignore-unmatch -- "$ID"
+          git checkout "origin/modul/$ID" -- "$ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo "dev enthält $ID/ bereits im Stand von modul/$ID."
+            exit 0
+          fi
+          sha=$(git rev-parse --short "origin/modul/$ID")
+          git commit -m "$ID: Stand von modul/$ID übernehmen ($sha)"
+          git push origin HEAD:dev
