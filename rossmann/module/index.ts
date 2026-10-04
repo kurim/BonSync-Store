@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { parseReceiptItems, parseSavings } from '../_shared/posParser';
+import { parseReceiptMeta } from '../_shared/receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { ReceiptItem, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // --- Konstanten aus docs/api-rossmann.md ---
 const ACCOUNT_API = 'https://rsmappapi.rossmann.net/account.ws';
@@ -214,6 +215,12 @@ export default function createRossmannModule(sdk: ModuleSdk): StoreModule {
 		return parseSavings(await sdk.pdf.extractLines(buffer));
 	}
 
+	async function fetchReceiptMeta(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptMeta | null> {
+		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
+		if (!buffer) return null;
+		return parseReceiptMeta(await sdk.pdf.extractLines(buffer));
+	}
+
 	async function refreshMarketInfo(creds: StoredCredentials, externalId: string): Promise<ReceiptSummary['market']> {
 		const c = creds as RossmannCredentials;
 		let cached = receiptListCache.get(c.accountHash);
@@ -233,6 +240,7 @@ export default function createRossmannModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptPdf,
 		fetchReceiptItems,
 		fetchReceiptSavings,
+		fetchReceiptMeta,
 		refreshMarketInfo
 	};
 }
