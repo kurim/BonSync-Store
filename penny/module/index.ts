@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { parseReceiptItems, parseSavings, parseMarketNumber } from '../_shared/posParser';
+import { parseReceiptMeta } from '../_shared/receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { AuthorizeStart, ReceiptItem, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { AuthorizeStart, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // --- Konstanten aus docs/api-penny.md ---
 const DISCOVERY_URL = 'https://account.penny.de/realms/penny/.well-known/openid-configuration';
@@ -244,6 +245,12 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		return parseSavings(await sdk.pdf.extractLines(buffer));
 	}
 
+	async function fetchReceiptMeta(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptMeta | null> {
+		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
+		if (!buffer) return null;
+		return parseReceiptMeta(await sdk.pdf.extractLines(buffer));
+	}
+
 	async function refreshMarketInfo(creds: StoredCredentials, externalId: string, pdf?: Buffer): Promise<ReceiptSummary['market']> {
 		const buffer = pdf ?? (await fetchReceiptPdf(creds, externalId));
 		if (!buffer) return null;
@@ -261,6 +268,7 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptPdf,
 		fetchReceiptItems,
 		fetchReceiptSavings,
+		fetchReceiptMeta,
 		refreshMarketInfo
 	};
 }
