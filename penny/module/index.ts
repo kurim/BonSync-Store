@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { parseReceiptItems, parseSavings, parseMarketNumber } from '../_shared/posParser';
 import { parseReceiptMeta } from '../_shared/receiptMeta';
 import type { ModuleSdk } from '../../src/lib/server/modules/sdk';
-import type { AuthorizeStart, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
+import type { AuthorizeStart, MarketRef, Offer, ReceiptItem, ReceiptMeta, ReceiptSavings, ReceiptSummary, StoreModule, StoredCredentials } from '../../src/lib/server/modules/types';
 
 // --- Konstanten aus docs/api-penny.md ---
 const DISCOVERY_URL = 'https://account.penny.de/realms/penny/.well-known/openid-configuration';
@@ -11,6 +11,8 @@ const REDIRECT_URI = 'https://www.penny.de/app/login';
 const SCOPE = 'openid profile email';
 const API_BASE = 'https://api.penny.de';
 const MARKET_LIST_URL = 'https://www.penny.de/.rest/market';
+const OFFERS_PAGE_URL = 'https://www.penny.de/angebote';
+const OFFERS_BASE = 'https://www.penny.de/.rest/offers/by-category';
 const MARKET_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // Marktliste ändert sich selten, 1x täglich reicht
 
 interface PennyCredentials extends StoredCredentials {
@@ -38,6 +40,35 @@ interface PennyMarket {
 	streetWithHouseNumber: string;
 	zipCode: string;
 	city: string;
+}
+
+/** Wochentag-Präfix der Angebotsgruppen (`ab-montag--getraenke`) -> Tage ab Montag der Angebotswoche. */
+const OFFER_DAY_OFFSET: Record<string, number> = { montag: 0, dienstag: 1, mittwoch: 2, donnerstag: 3, freitag: 4, samstag: 5 };
+
+/** Montag 00:00 UTC der ISO-Kalenderwoche `yyyy-ww`. */
+function isoWeekMonday(week: string): number {
+	const [year, ww] = week.split('-').map(Number);
+	const jan4 = new Date(Date.UTC(year, 0, 4));
+	const monday1 = jan4.getTime() - ((jan4.getUTCDay() || 7) - 1) * 86_400_000;
+	return monday1 + (ww - 1) * 7 * 86_400_000;
+}
+
+/** Preis-String der Website (`"0.99"`, evtl. mit Fußnoten-Hochziffern wie `"0.85²"`) in Cent. */
+function priceToCents(value: unknown): number | undefined {
+	if (typeof value === 'number') return Math.round(value * 100);
+	if (typeof value !== 'string') return undefined;
+	const n = parseFloat(value.replace(/[^0-9.,]/g, '').replace(',', '.'));
+	return Number.isFinite(n) ? Math.round(n * 100) : undefined;
+}
+
+const SLUG_WORDS: Record<string, string> = { getraenke: 'Getränke', gemuese: 'Gemüse', kuehlregal: 'Kühlregal', und: 'und' };
+/** `obst-und-gemuese1` -> `Obst und Gemüse` (angehängte Ziffer unterscheidet nur die Wochentagsgruppe). */
+function slugToLabel(slug: string): string {
+	return slug
+		.replace(/\d+$/, '')
+		.split('-')
+		.map((w) => SLUG_WORDS[w] ?? w.charAt(0).toUpperCase() + w.slice(1))
+		.join(' ');
 }
 
 /** Anmeldung bei PENNY abgelaufen/ungültig (401 oder Refresh-Token abgelehnt) -- nur ein neuer
@@ -86,6 +117,103 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		}
 		marketCache = { byMarketNumber, fetchedAt: Date.now() };
 		return byMarketNumber;
+	}
+
+	async function searchMarkets(_creds: StoredCredentials | null, query: { zip?: string; text?: string }): Promise<MarketRef[]> {
+		const zip = (query.zip ?? '').trim();
+		const text = (query.text ?? '').trim().toLowerCase();
+		if (!zip && !text) return [];
+		const all = [...(await getMarketIndex()).values()].flat();
+		return all
+			.filter((m) => (zip ? m.zipCode?.startsWith(zip) : `${m.marketName} ${m.streetWithHouseNumber} ${m.zipCode} ${m.city}`.toLowerCase().includes(text)))
+			.slice(0, 50)
+			.map((m) => ({ id: m.wawi, name: m.marketName, street: m.streetWithHouseNumber, zipCode: m.zipCode, city: m.city }));
+	}
+
+	interface OfferTile {
+		uuid?: string;
+		title?: string;
+		quantity?: string | null;
+		price?: unknown;
+		listPrice?: unknown;
+		crossOutPrice?: unknown;
+		originalPrice?: unknown;
+		basePrice?: string | null;
+		imageRendition?: Record<string, string | undefined>;
+	}
+
+	/** Wochenangebote über die öffentliche Website-REST-API (Magnolia CMS, kein Login, siehe
+	 * api-penny.md Abschnitt 4). Die Angebote gelten bundesweit und sind nicht marktspezifisch --
+	 * `markets` wird deshalb nicht ausgewertet und `marketIds` weggelassen (= alle gewählten Märkte).
+	 * Woche und Kategorien stehen nur im HTML der `/angebote`-Seite. Die Gültigkeit ergibt sich aus
+	 * dem Wochentag der Kategoriegruppe (`ab-montag`, `ab-donnerstag`, ...) bis Samstag. Das Tile-
+	 * Format ist je `primaryType` uneinheitlich, daher sind alle Felder optional; ein Abruf, der
+	 * Kategorien, aber kein einziges lesbares Angebot liefert, wirft mit einer Beschreibung. */
+	async function fetchOffers(_creds: StoredCredentials | null, _markets: MarketRef[]): Promise<Offer[]> {
+		const headers = { 'Accept-Language': 'de-DE,de;q=0.9', 'User-Agent': 'Mozilla/5.0 (compatible; BonSync)' };
+		const page = await sdk.http.rawRequest(OFFERS_PAGE_URL, { method: 'GET', headers: { ...headers, Accept: 'text/html' } });
+		if (page.status !== 200) throw new Error(`PENNY /angebote antwortete mit Status ${page.status}`);
+		const html = page.body.toString('utf8');
+
+		const week = /by-category\/(\d{4}-\d{2})\//.exec(html)?.[1];
+		if (!week) throw new Error('PENNY-Angebote: Kalenderwoche (by-category/<jjjj-ww>) auf /angebote nicht gefunden.');
+		const groups: { day: string; slug: string }[] = [];
+		for (const m of html.matchAll(/data-category-id="ab-([a-zäöüß]+)--([a-z0-9-]+)"/g)) {
+			if (!groups.some((g) => g.slug === m[2] && g.day === m[1])) groups.push({ day: m[1], slug: m[2] });
+		}
+		if (groups.length === 0) throw new Error(`PENNY-Angebote (Woche ${week}): keine Kategorien (data-category-id) auf /angebote gefunden.`);
+
+		const monday = isoWeekMonday(week);
+		const validTo = monday + 5 * 86_400_000 + 86_399_000; // Samstag 23:59:59
+		const byId = new Map<string, Offer>();
+		let tiles = 0;
+		let unreadable = 0;
+		let failed = 0;
+		for (const { day, slug } of groups) {
+			const res = await sdk.http.requestJson<{ offerTiles?: OfferTile[] }>(`${OFFERS_BASE}/${week}/${slug}`, { method: 'GET', headers: { ...headers, Accept: 'application/json' } });
+			if (res.status !== 200) {
+				failed++;
+				continue;
+			}
+			const validFrom = monday + (OFFER_DAY_OFFSET[day] ?? 0) * 86_400_000;
+			for (const t of res.json?.offerTiles ?? []) {
+				tiles++;
+				const title = (t.title ?? '').replace(/[*¹²³⁴⁵⁶⁷⁸⁹⁰]+\s*$/, '').trim();
+				const priceCents = priceToCents(t.price);
+				if (!t.uuid || !title || priceCents == null) {
+					unreadable++;
+					continue;
+				}
+				const original = priceToCents(t.listPrice) ?? priceToCents(t.crossOutPrice) ?? priceToCents(t.originalPrice);
+				const base = /^\(?\s*(.*?)\s*=\s*([\d.,]+)\s*\)?$/.exec(t.basePrice ?? '');
+				const baseText = base ? `${base[1]} = ${base[2].replace('.', ',')} €` : (t.basePrice ?? '').replace(/[()]/g, '').trim();
+				const unitPriceText = [t.quantity?.trim(), baseText].filter(Boolean).join(', ') || undefined;
+				const category = slugToLabel(slug);
+				const existing = byId.get(t.uuid);
+				if (existing) {
+					// Dasselbe Angebot in mehreren Kategorien: früheste Gültigkeit, und eine konkrete Kategorie vor "Top Angebote".
+					existing.validFrom = Math.min(existing.validFrom ?? validFrom, validFrom);
+					if (existing.category === 'Top Angebote' && category !== 'Top Angebote') existing.category = category;
+					continue;
+				}
+				const img = t.imageRendition;
+				byId.set(t.uuid, {
+					externalId: t.uuid,
+					title,
+					priceCents,
+					originalPriceCents: original != null && original > priceCents ? original : undefined,
+					unitPriceText,
+					validFrom,
+					validTo,
+					imageUrl: img?.tileMd ?? img?.tileLg ?? img?.tileSm ?? img?.tileXl ?? img?.tileXs,
+					category
+				});
+			}
+		}
+		if (byId.size === 0) {
+			throw new Error(`PENNY-Angebote (Woche ${week}): ${groups.length} Kategorien, ${failed} nicht abrufbar, ${tiles} Einträge davon ${unreadable} ohne lesbaren Titel/Preis.`);
+		}
+		return [...byId.values()];
 	}
 
 	/** Löst eine 4-stellige PENNY-Marktnummer über die öffentliche Marktliste auf -- nur wenn
@@ -290,6 +418,8 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		fetchReceiptItems,
 		fetchReceiptSavings,
 		fetchReceiptMeta,
-		refreshMarketInfo
+		refreshMarketInfo,
+		searchMarkets,
+		fetchOffers
 	};
 }
