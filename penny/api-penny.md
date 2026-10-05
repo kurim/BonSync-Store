@@ -110,8 +110,14 @@ Auth: Authorization: Bearer <access_token>
 Header: correlation-id: <uuid v4>   (pro Request neu, von der offiziellen App mitgeschickt — unklar ob serverseitig erzwungen, aber zur Sicherheit setzen)
 ```
 
-Bei `401` (abgelaufener Access Token): Token per 1.3 erneuern und den Request
-einmal wiederholen.
+Bei `401` (abgelaufener/widerrufener Access Token) wirft das Modul einen
+`PennyAuthExpiredError` ("PENNY-Anmeldung abgelaufen … bitte erneut anmelden."). Das Token wird
+vorab in `ensureFreshCredentials` erneuert (60 s Puffer); ein trotzdem auftretendes 401 heißt, dass die
+Keycloak-Session beendet wurde -- nur ein neuer Login (1.1) hilft. Gleiches gilt, wenn der Refresh
+(1.3) mit 400/401 abgelehnt wird. Die App setzt den Händler dann auf "Handlung nötig" mit "Erneut anmelden".
+
+Zusätzlich sendet die offizielle App (und das Modul): `Accept-Language: de-DE,de;q=0.9`,
+`User-Agent: PENNY-App/Android`.
 
 ### 2.1 `GET /api/tenants/penny/customers/{reweId}/ebons`
 

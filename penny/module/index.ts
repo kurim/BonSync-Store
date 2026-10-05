@@ -40,6 +40,15 @@ interface PennyMarket {
 	city: string;
 }
 
+/** Anmeldung bei PENNY abgelaufen/ungültig (401 oder Refresh-Token abgelehnt) -- nur ein neuer
+ * Login (beginLogin/completeLogin) hilft. Die App zeigt die Meldung am Händler an ("Erneut anmelden"). */
+class PennyAuthExpiredError extends Error {
+	constructor(detail: string) {
+		super(`PENNY-Anmeldung abgelaufen (${detail}) — bitte erneut anmelden.`);
+		this.name = 'PennyAuthExpiredError';
+	}
+}
+
 /** JWT-Payload dekodieren (nur lesen, keine Signaturprüfung nötig — reine Info-Extraktion). */
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
 	const payload = jwt.split('.')[1];
@@ -101,6 +110,10 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 			body: sdk.http.formBody(params)
 		});
+		// Abgelaufener/widerrufener Refresh-Token (bzw. beendete Keycloak-Session): 400 invalid_grant oder 401.
+		if (params.grant_type === 'refresh_token' && (status === 400 || status === 401)) {
+			throw new PennyAuthExpiredError(`Refresh-Token abgelehnt, Status ${status}`);
+		}
 		if (status !== 200 || !json.access_token) {
 			throw new Error(`PENNY-Token-Endpoint antwortete mit Status ${status}`);
 		}
@@ -170,7 +183,13 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 	}
 
 	function pennyHeaders(c: PennyCredentials): Record<string, string> {
-		return { Authorization: `Bearer ${c.accessToken}`, 'correlation-id': randomUUID(), Accept: 'application/json' };
+		return {
+			Authorization: `Bearer ${c.accessToken}`,
+			'correlation-id': randomUUID(),
+			Accept: 'application/json',
+			'Accept-Language': 'de-DE,de;q=0.9',
+			'User-Agent': 'PENNY-App/Android'
+		};
 	}
 
 	interface EbonsResponse {
@@ -201,6 +220,7 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		while (true) {
 			const url = `${API_BASE}/api/tenants/penny/customers/${c.reweId}/ebons?page=${page}&objectsPerPage=${objectsPerPage}`;
 			const { status, json } = await sdk.http.requestJson<EbonsResponse>(url, { method: 'GET', headers: pennyHeaders(c) });
+			if (status === 401) throw new PennyAuthExpiredError('401 bei /ebons');
 			if (status !== 200) throw new Error(`PENNY /ebons antwortete mit Status ${status}`);
 
 			let hitKnown = false;
@@ -229,6 +249,7 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		const c = creds as PennyCredentials;
 		const url = `${API_BASE}/api/tenants/penny/customers/${c.reweId}/ebons/${externalId}/pdf`;
 		const res = await sdk.http.rawRequest(url, { method: 'GET', headers: { ...pennyHeaders(c), Accept: 'application/pdf' } });
+		if (res.status === 401) throw new PennyAuthExpiredError('401 beim PDF-Abruf');
 		if (res.status !== 200) return null;
 		return res.body;
 	}
