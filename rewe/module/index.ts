@@ -319,6 +319,7 @@ export default function createReweModule(sdk: ModuleSdk): StoreModule {
 						validFrom,
 						validTo: toEpoch(item.validUntil ?? item.untilDate) ?? weekEnd,
 						imageUrl: image ? String(image) : undefined,
+						category: clean(category.title) || undefined,
 						marketIds: [marketId]
 					});
 				}
