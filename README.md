@@ -3,7 +3,7 @@
 Holt eBons aus dem PENNY-Konto (REST-API der PENNY-eBon-App, OAuth 2.0 PKCE über Keycloak) und liest Artikel, Ersparnis und Belegmetadaten aus dem Beleg-PDF.
 
 Dies ist der Branch `modul/penny` des [BonSync-Store](https://github.com/kurim/BonSync-Store): Er enthält nur
-die Quellen des PENNY-Moduls (aktuelle Version 1.1.0). Die übrigen Module, die Build-Pipeline und die
+die Quellen des PENNY-Moduls (aktuelle Version 1.4.0). Die übrigen Module, die Build-Pipeline und die
 Dokumentation des Modul-Formats liegen im Branch `dev` bzw. `main`.
 
 ## Login
@@ -15,6 +15,7 @@ OAuth 2.0 mit PKCE; der Redirect ist eine normale https-URL (`oauth-pkce-redirec
 - Belegliste und Beleg-PDF
 - Artikel und Ersparnis (Coupons) aus dem PDF
 - Marktdaten über die Marktnummer auf dem Beleg
+- Wochenangebote (`searchMarkets` / `fetchOffers`) über die öffentliche Website-API von penny.de, ohne Login und bundesweit (nicht marktspezifisch)
 - Belegmetadaten (`fetchReceiptMeta`): TSE, Zahlungsart, MwSt.-Aufschlüsselung, Treuepunkte-Zeile, zusätzliche Vorteile am Bon-Ende
 
 ## Dateien
