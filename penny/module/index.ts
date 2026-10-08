@@ -53,6 +53,24 @@ function isoWeekMonday(week: string): number {
 	return monday1 + (ww - 1) * 7 * 86_400_000;
 }
 
+/** ISO-Woche (`jjjj-ww`) des Datums nach Berliner Ortszeit. */
+function berlinIsoWeek(date: Date): string {
+	const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' })
+		.format(date)
+		.split('-')
+		.map(Number);
+	const day = new Date(Date.UTC(y, m - 1, d));
+	day.setUTCDate(day.getUTCDate() + 4 - (day.getUTCDay() || 7)); // Donnerstag der Woche bestimmt das ISO-Jahr
+	const yearStart = Date.UTC(day.getUTCFullYear(), 0, 1);
+	const ww = Math.ceil(((day.getTime() - yearStart) / 86_400_000 + 1) / 7);
+	return `${day.getUTCFullYear()}-${String(ww).padStart(2, '0')}`;
+}
+
+/** Verschiebt eine ISO-Woche `jjjj-ww` um `delta` Wochen. */
+function shiftIsoWeek(week: string, delta: number): string {
+	return berlinIsoWeek(new Date(isoWeekMonday(week) + delta * 7 * 86_400_000 + 12 * 3_600_000));
+}
+
 /** Preis-String der Website (`"0.99"`, evtl. mit Fußnoten-Hochziffern wie `"0.85²"`) in Cent. */
 function priceToCents(value: unknown): number | undefined {
 	if (typeof value === 'number') return Math.round(value * 100);
@@ -150,18 +168,55 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 	 * Format ist je `primaryType` uneinheitlich, daher sind alle Felder optional; ein Abruf, der
 	 * Kategorien, aber kein einziges lesbares Angebot liefert, wirft mit einer Beschreibung. */
 	async function fetchOffers(_creds: StoredCredentials | null, _markets: MarketRef[]): Promise<Offer[]> {
-		const headers = { 'Accept-Language': 'de-DE,de;q=0.9', 'User-Agent': 'Mozilla/5.0 (compatible; BonSync)' };
+		const headers = {
+			'Accept-Language': 'de-DE,de;q=0.9',
+			'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+		};
 		const page = await sdk.http.rawRequest(OFFERS_PAGE_URL, { method: 'GET', headers: { ...headers, Accept: 'text/html' } });
 		if (page.status !== 200) throw new Error(`PENNY /angebote antwortete mit Status ${page.status}`);
 		const html = page.body.toString('utf8');
+		const probe = async (week: string): Promise<boolean> => {
+			try {
+				const r = await sdk.http.requestJson<{ offerTiles?: unknown[] }>(`${OFFERS_BASE}/${week}/top-angebote`, { method: 'GET', headers: { ...headers, Accept: 'application/json' } });
+				return r.status === 200 && Array.isArray(r.json?.offerTiles);
+			} catch {
+				return false;
+			}
+		};
 
-		const week = /by-category\/(\d{4}-\d{2})\//.exec(html)?.[1];
-		if (!week) throw new Error('PENNY-Angebote: Kalenderwoche (by-category/<jjjj-ww>) auf /angebote nicht gefunden.');
-		const groups: { day: string; slug: string }[] = [];
-		for (const m of html.matchAll(/data-category-id="ab-([a-zäöüß]+)--([a-z0-9-]+)"/g)) {
-			if (!groups.some((g) => g.slug === m[2] && g.day === m[1])) groups.push({ day: m[1], slug: m[2] });
+		// Woche: aus einem by-category-Link der Seite (auch JSON-escaped `\/` oder `%2F`), sonst die
+		// aktuelle Berliner ISO-Woche per Probe-Abruf (aktuelle, dann nächste, dann vorherige).
+		const wm = /by-category(?:\\?\/|%2F)(\d{4})-(\d{1,2})(?!\d)/i.exec(html);
+		let week = wm ? `${wm[1]}-${wm[2].padStart(2, '0')}` : undefined;
+		if (!week) {
+			const cur = berlinIsoWeek(new Date());
+			for (const cand of [cur, shiftIsoWeek(cur, 1), shiftIsoWeek(cur, -1)]) {
+				if (await probe(cand)) {
+					week = cand;
+					break;
+				}
+			}
 		}
-		if (groups.length === 0) throw new Error(`PENNY-Angebote (Woche ${week}): keine Kategorien (data-category-id) auf /angebote gefunden.`);
+		if (!week) {
+			const title = /<title[^>]*>([^<]*)/i.exec(html)?.[1]?.trim().slice(0, 80) ?? '-';
+			throw new Error(`PENNY-Angebote: Kalenderwoche nicht gefunden (/angebote: ${html.length} Zeichen, Titel "${title}", enthält "by-category": ${html.includes('by-category')}; auch der Probe-Abruf ${OFFERS_BASE}/<woche>/top-angebote schlug fehl).`);
+		}
+
+		// Kategorien: data-category-id="ab-<wochentag>--<slug>", sonst jede by-category/<woche>/<slug>-Referenz,
+		// sonst die in api-penny.md beobachteten Kategorien (unvollständig, aber besser als nichts).
+		const groups: { day: string; slug: string }[] = [];
+		const addGroup = (day: string, slug: string) => {
+			if (!groups.some((g) => g.slug === slug)) groups.push({ day, slug });
+		};
+		for (const m of html.matchAll(/data-category-id=["']ab-([a-zäöüß]+)--([a-z0-9-]+)["']/g)) addGroup(m[1], m[2]);
+		if (groups.length === 0) {
+			for (const m of html.matchAll(/by-category(?:\\?\/|%2F)\d{4}-\d{1,2}(?:\\?\/|%2F)([a-z0-9-]+)/gi)) addGroup('montag', m[1].toLowerCase());
+		}
+		if (groups.length === 0) {
+			for (const slug of ['top-angebote', 'obst-und-gemuese', 'kuehlregal', 'fleisch-und-wurst', 'getraenke', 'dauerhaft-im-preis-gesenkt']) addGroup('montag', slug);
+			for (const slug of ['haushalt-und-wohnen', 'kochen-und-backen', 'kinderwelt', 'getraenke1']) addGroup('donnerstag', slug);
+			addGroup('freitag', 'framstag');
+		}
 
 		const monday = isoWeekMonday(week);
 		const validTo = monday + 5 * 86_400_000 + 86_399_000; // Samstag 23:59:59
