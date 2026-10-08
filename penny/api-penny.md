@@ -379,7 +379,7 @@ entsprechen, auch wenn hier keine mitgeschnittene Rohantwort vorliegt).
 ```
 project_id:   rd-penny-prod-v001-5e43f
 app_id:       1:949429868154:android:7cff3a72875620e4
-api_key:      AIzaSyCNzGDsFalEo-I7bztjf7zPbXcaAtWBs30
+api_key:      <öffentlicher Android-Key, aus der APK (google-services) zu entnehmen>
 database_url: https://rd-penny-prod-v001-5e43f.firebaseio.com   (Realtime DB — für Angebote nicht relevant)
 ```
 
