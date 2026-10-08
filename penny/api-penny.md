@@ -269,6 +269,29 @@ GET https://www.penny.de/.rest/offers/by-category/{yyyy-ww}/{slug}
 
 Response: `application/json`, kein Auth-Header, keine Cookies nötig.
 
+**Regional:** Die Angebote hängen an der Verkaufsregion des Markts
+(`?region=<sellingRegion>`, z. B. `?region=15A-02-34`). Ohne `region` kommt nur
+der Grundstand, regionale Angebote (z. B. eine Getränke-Aktion nur in einzelnen
+Regionen) fehlen dann. Die Region steht je Markt in der Marktliste
+`GET https://www.penny.de/.rest/market`, neben `wwIdent`, `wawi`, `marketName`,
+`streetWithHouseNumber`, `zipCode`, `city`:
+
+```json
+{
+  "wwIdent": "1930515",
+  "wawi": "33300515",
+  "sellingRegion": "15A-02-34",
+  "nextWeekSellingRegion": "",
+  "marketName": "Penny Hilden",
+  "streetWithHouseNumber": "Mittelstrasse 107",
+  "zipCode": "40721"
+}
+```
+
+`nextWeekSellingRegion` ist die Region für die Vorschau der Folgewoche (nicht
+ausgewertet). Das Modul gruppiert die gewählten Märkte nach `sellingRegion` und
+ruft pro Region einmal alle Kategorien ab.
+
 ### 4.2 Kategorien & Wochentags-Gruppen entdecken
 
 Die `/angebote`-Seite enthält im HTML `data-category-id`-Attribute im Format
