@@ -35,6 +35,9 @@ interface DiscoveryDocument {
 }
 
 interface PennyMarket {
+	wwIdent?: string;
+	sellingRegion?: string; // Verkaufsregion für Angebote, z.B. "15A-02-34" (leer = keine Regionsangabe)
+	nextWeekSellingRegion?: string;
 	wawi: string; // 8-stellig, die letzten 4 Ziffern sind die auf Kassenbon/API sichtbare "Marktnummer"
 	marketName: string;
 	streetWithHouseNumber: string;
@@ -162,13 +165,15 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 	}
 
 	/** Wochenangebote über die öffentliche Website-REST-API (Magnolia CMS, kein Login, siehe
-	 * api-penny.md Abschnitt 4). Die Angebote gelten bundesweit und sind nicht marktspezifisch --
-	 * `markets` wird deshalb nicht ausgewertet und `marketIds` weggelassen (= alle gewählten Märkte).
+	 * api-penny.md Abschnitt 4). Die Angebote sind regional (`?region=<sellingRegion>`): Die Region
+	 * jedes gewählten Markts steht in der Marktliste `.rest/market`; Märkte derselben Region teilen
+	 * sich einen Abruf, und jedes Angebot trägt die `marketIds` der Märkte, für die es gilt. Ist die
+	 * Region eines Markts unbekannt, wird ohne Region abgerufen (bundesweiter Stand).
 	 * Woche und Kategorien stehen nur im HTML der `/angebote`-Seite. Die Gültigkeit ergibt sich aus
 	 * dem Wochentag der Kategoriegruppe (`ab-montag`, `ab-donnerstag`, ...) bis Samstag. Das Tile-
 	 * Format ist je `primaryType` uneinheitlich, daher sind alle Felder optional; ein Abruf, der
 	 * Kategorien, aber kein einziges lesbares Angebot liefert, wirft mit einer Beschreibung. */
-	async function fetchOffers(_creds: StoredCredentials | null, _markets: MarketRef[]): Promise<Offer[]> {
+	async function fetchOffers(_creds: StoredCredentials | null, markets: MarketRef[]): Promise<Offer[]> {
 		const headers = {
 			'Accept-Language': 'de-DE,de;q=0.9',
 			'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
@@ -228,68 +233,101 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 			for (const { slug } of [...groups]) if (!/\d$/.test(slug)) addGroup('donnerstag', `${slug}1`);
 		}
 
+		// Region je Markt aus der Marktliste (Schlüssel: wawi = MarketRef.id); Märkte einer Region teilen sich den Abruf.
+		const regionOf = new Map<string, string>();
+		try {
+			for (const m of [...(await getMarketIndex()).values()].flat()) if (m.sellingRegion) regionOf.set(m.wawi, m.sellingRegion);
+		} catch {
+			// Marktliste nicht erreichbar: ohne Region (bundesweiter Stand) weitermachen
+		}
+		const marketsByRegion = new Map<string, string[]>(); // '' = ohne Region
+		for (const m of markets.length > 0 ? markets : [{ id: '' }]) {
+			const region = regionOf.get(m.id) ?? '';
+			marketsByRegion.set(region, [...(marketsByRegion.get(region) ?? []), m.id]);
+		}
+
 		const monday = isoWeekMonday(week);
 		const validTo = monday + 5 * 86_400_000 + 86_399_000; // Samstag 23:59:59
-		const byId = new Map<string, Offer>();
 		let tiles = 0;
 		let unreadable = 0;
 		let failed = 0;
 		let unreadableSample: string | undefined;
-		for (const { day, slug } of groups) {
-			const res = await sdk.http.requestJson<{ offerTiles?: OfferTile[] }>(`${OFFERS_BASE}/${week}/${slug}`, { method: 'GET', headers: { ...headers, Accept: 'application/json' } });
-			if (res.status !== 200) {
-				failed++;
-				continue;
+
+		const loadRegion = async (region: string): Promise<Offer[]> => {
+			const byId = new Map<string, Offer>();
+			const query = region ? `?region=${encodeURIComponent(region)}` : '';
+			for (const { day, slug } of groups) {
+				const res = await sdk.http.requestJson<{ offerTiles?: OfferTile[] }>(`${OFFERS_BASE}/${week}/${slug}${query}`, { method: 'GET', headers: { ...headers, Accept: 'application/json' } });
+				if (res.status !== 200) {
+					failed++;
+					continue;
+				}
+				const validFrom = monday + (OFFER_DAY_OFFSET[day] ?? 0) * 86_400_000;
+				for (const t of res.json?.offerTiles ?? []) {
+					tiles++;
+					const title = (t.title ?? '').replace(/[*¹²³⁴⁵⁶⁷⁸⁹⁰]+\s*$/, '').trim();
+					// `productData` ist ein JSON-String mit dem Aktionspreis ("price") und dem Originalpreis ("rrp").
+					let pd: { price?: unknown; rrp?: unknown } = {};
+					try {
+						if (typeof t.productData === 'string') pd = JSON.parse(t.productData);
+					} catch {
+						// kein lesbares productData -- die Tile-Felder reichen dann
+					}
+					const priceCents = priceToCents(t.price) ?? priceToCents(pd.price);
+					if (!t.uuid || !title || priceCents == null) {
+						unreadable++;
+						unreadableSample ??= `${t.title ?? '?'} (${Object.keys(t).join(',')})`;
+						continue;
+					}
+					const original = priceToCents(t.listPrice) ?? priceToCents(t.crossOutPrice) ?? priceToCents(t.originalPrice) ?? priceToCents(pd.rrp);
+					const base = /^\(?\s*(.*?)\s*=\s*([\d.,]+)\s*\)?$/.exec(t.basePrice ?? '');
+					const baseText = base ? `${base[1]} = ${base[2].replace('.', ',')} €` : (t.basePrice ?? '').replace(/[()]/g, '').trim();
+					const unitPriceText = [t.quantity?.trim(), baseText].filter(Boolean).join(', ') || undefined;
+					const category = slugToLabel(slug);
+					const existing = byId.get(t.uuid);
+					if (existing) {
+						// Dasselbe Angebot in mehreren Kategorien: früheste Gültigkeit, und eine konkrete Kategorie vor "Top Angebote".
+						existing.validFrom = Math.min(existing.validFrom ?? validFrom, validFrom);
+						if (existing.category === 'Top Angebote' && category !== 'Top Angebote') existing.category = category;
+						continue;
+					}
+					const img = t.imageRendition;
+					byId.set(t.uuid, {
+						externalId: t.uuid,
+						title,
+						priceCents,
+						originalPriceCents: original != null && original > priceCents ? original : undefined,
+						unitPriceText,
+						validFrom,
+						validTo,
+						imageUrl: img?.tileMd ?? img?.tileLg ?? img?.tileSm ?? img?.tileXl ?? img?.tileXs,
+						category
+					});
+				}
 			}
-			const validFrom = monday + (OFFER_DAY_OFFSET[day] ?? 0) * 86_400_000;
-			for (const t of res.json?.offerTiles ?? []) {
-				tiles++;
-				const title = (t.title ?? '').replace(/[*¹²³⁴⁵⁶⁷⁸⁹⁰]+\s*$/, '').trim();
-				// `productData` ist ein JSON-String mit dem Aktionspreis ("price") und dem Originalpreis ("rrp").
-				let pd: { price?: unknown; rrp?: unknown } = {};
-				try {
-					if (typeof t.productData === 'string') pd = JSON.parse(t.productData);
-				} catch {
-					// kein lesbares productData -- die Tile-Felder reichen dann
-				}
-				const priceCents = priceToCents(t.price) ?? priceToCents(pd.price);
-				if (!t.uuid || !title || priceCents == null) {
-					unreadable++;
-					unreadableSample ??= `${t.title ?? '?'} (${Object.keys(t).join(',')})`;
-					continue;
-				}
-				const original = priceToCents(t.listPrice) ?? priceToCents(t.crossOutPrice) ?? priceToCents(t.originalPrice) ?? priceToCents(pd.rrp);
-				const base = /^\(?\s*(.*?)\s*=\s*([\d.,]+)\s*\)?$/.exec(t.basePrice ?? '');
-				const baseText = base ? `${base[1]} = ${base[2].replace('.', ',')} €` : (t.basePrice ?? '').replace(/[()]/g, '').trim();
-				const unitPriceText = [t.quantity?.trim(), baseText].filter(Boolean).join(', ') || undefined;
-				const category = slugToLabel(slug);
-				const existing = byId.get(t.uuid);
-				if (existing) {
-					// Dasselbe Angebot in mehreren Kategorien: früheste Gültigkeit, und eine konkrete Kategorie vor "Top Angebote".
-					existing.validFrom = Math.min(existing.validFrom ?? validFrom, validFrom);
-					if (existing.category === 'Top Angebote' && category !== 'Top Angebote') existing.category = category;
-					continue;
-				}
-				const img = t.imageRendition;
-				byId.set(t.uuid, {
-					externalId: t.uuid,
-					title,
-					priceCents,
-					originalPriceCents: original != null && original > priceCents ? original : undefined,
-					unitPriceText,
-					validFrom,
-					validTo,
-					imageUrl: img?.tileMd ?? img?.tileLg ?? img?.tileSm ?? img?.tileXl ?? img?.tileXs,
-					category
-				});
+			return [...byId.values()];
+		};
+
+		// Ergebnisse der Regionen zusammenführen: inhaltsgleiche Angebote bekommen die Vereinigung der Märkte,
+		// abweichende (z. B. regional anderer Preis) bleiben getrennte Einträge mit gleicher externalId.
+		const merged = new Map<string, Offer>();
+		for (const [region, marketIds] of marketsByRegion) {
+			for (const o of await loadRegion(region)) {
+				const ids = marketIds.filter(Boolean);
+				const key = JSON.stringify([o.externalId, o.title, o.priceCents, o.originalPriceCents, o.unitPriceText, o.validFrom, o.validTo, o.category, o.imageUrl]);
+				const existing = merged.get(key);
+				if (existing) existing.marketIds = [...new Set([...(existing.marketIds ?? []), ...ids])];
+				else merged.set(key, ids.length > 0 ? { ...o, marketIds: ids } : o);
 			}
 		}
-		// Spur für die Server-Logs, falls Angebote fehlen: Woher kamen die Kategorien, wie viele Einträge je Lauf.
-		console.warn(`[penny] Angebote Woche ${week}: Kategorien aus ${source} (${groups.length}, ${failed} nicht abrufbar), ${tiles} Einträge, ${byId.size} Angebote, ${unreadable} unlesbar${unreadableSample ? `, z. B. ${unreadableSample}` : ''}`);
-		if (byId.size === 0) {
+		// Spur für die Server-Logs, falls Angebote fehlen: Woher kamen die Kategorien, welche Regionen, wie viele Einträge.
+		console.warn(
+			`[penny] Angebote Woche ${week}: Kategorien aus ${source} (${groups.length}), Regionen ${[...marketsByRegion.keys()].map((r) => r || 'ohne').join(', ')}, ${failed} Abrufe fehlgeschlagen, ${tiles} Einträge, ${merged.size} Angebote, ${unreadable} unlesbar${unreadableSample ? `, z. B. ${unreadableSample}` : ''}`
+		);
+		if (merged.size === 0) {
 			throw new Error(`PENNY-Angebote (Woche ${week}): ${groups.length} Kategorien, ${failed} nicht abrufbar, ${tiles} Einträge davon ${unreadable} ohne lesbaren Titel/Preis.`);
 		}
-		return [...byId.values()];
+		return [...merged.values()];
 	}
 
 	/** Löst eine 4-stellige PENNY-Marktnummer über die öffentliche Marktliste auf -- nur wenn
