@@ -157,6 +157,7 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		crossOutPrice?: unknown;
 		originalPrice?: unknown;
 		basePrice?: string | null;
+		productData?: string | null;
 		imageRendition?: Record<string, string | undefined>;
 	}
 
@@ -208,14 +209,23 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		const addGroup = (day: string, slug: string) => {
 			if (!groups.some((g) => g.slug === slug)) groups.push({ day, slug });
 		};
+		let source = 'Seite';
 		for (const m of html.matchAll(/data-category-id=["']ab-([a-zäöüß]+)--([a-z0-9-]+)["']/g)) addGroup(m[1], m[2]);
 		if (groups.length === 0) {
+			source = 'Links';
 			for (const m of html.matchAll(/by-category(?:\\?\/|%2F)\d{4}-\d{1,2}(?:\\?\/|%2F)([a-z0-9-]+)/gi)) addGroup('montag', m[1].toLowerCase());
 		}
 		if (groups.length === 0) {
+			source = 'Standardliste';
 			for (const slug of ['top-angebote', 'obst-und-gemuese', 'kuehlregal', 'fleisch-und-wurst', 'getraenke', 'dauerhaft-im-preis-gesenkt']) addGroup('montag', slug);
 			for (const slug of ['haushalt-und-wohnen', 'kochen-und-backen', 'kinderwelt', 'getraenke1']) addGroup('donnerstag', slug);
 			addGroup('freitag', 'framstag');
+		}
+		if (source !== 'Seite') {
+			// Ohne die Kategorieliste der Seite fehlen die Donnerstags-Gruppen: dort heißen Kategorien wie
+			// die der Montagsgruppe, nur mit angehängter Ziffer (`getraenke1`, `obst-und-gemuese1`). Unbekannte
+			// Slugs antworten 404 und werden übersprungen.
+			for (const { slug } of [...groups]) if (!/\d$/.test(slug)) addGroup('donnerstag', `${slug}1`);
 		}
 
 		const monday = isoWeekMonday(week);
@@ -224,6 +234,7 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 		let tiles = 0;
 		let unreadable = 0;
 		let failed = 0;
+		let unreadableSample: string | undefined;
 		for (const { day, slug } of groups) {
 			const res = await sdk.http.requestJson<{ offerTiles?: OfferTile[] }>(`${OFFERS_BASE}/${week}/${slug}`, { method: 'GET', headers: { ...headers, Accept: 'application/json' } });
 			if (res.status !== 200) {
@@ -234,12 +245,20 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 			for (const t of res.json?.offerTiles ?? []) {
 				tiles++;
 				const title = (t.title ?? '').replace(/[*¹²³⁴⁵⁶⁷⁸⁹⁰]+\s*$/, '').trim();
-				const priceCents = priceToCents(t.price);
+				// `productData` ist ein JSON-String mit dem Aktionspreis ("price") und dem Originalpreis ("rrp").
+				let pd: { price?: unknown; rrp?: unknown } = {};
+				try {
+					if (typeof t.productData === 'string') pd = JSON.parse(t.productData);
+				} catch {
+					// kein lesbares productData -- die Tile-Felder reichen dann
+				}
+				const priceCents = priceToCents(t.price) ?? priceToCents(pd.price);
 				if (!t.uuid || !title || priceCents == null) {
 					unreadable++;
+					unreadableSample ??= `${t.title ?? '?'} (${Object.keys(t).join(',')})`;
 					continue;
 				}
-				const original = priceToCents(t.listPrice) ?? priceToCents(t.crossOutPrice) ?? priceToCents(t.originalPrice);
+				const original = priceToCents(t.listPrice) ?? priceToCents(t.crossOutPrice) ?? priceToCents(t.originalPrice) ?? priceToCents(pd.rrp);
 				const base = /^\(?\s*(.*?)\s*=\s*([\d.,]+)\s*\)?$/.exec(t.basePrice ?? '');
 				const baseText = base ? `${base[1]} = ${base[2].replace('.', ',')} €` : (t.basePrice ?? '').replace(/[()]/g, '').trim();
 				const unitPriceText = [t.quantity?.trim(), baseText].filter(Boolean).join(', ') || undefined;
@@ -265,6 +284,8 @@ export default function createPennyModule(sdk: ModuleSdk): StoreModule {
 				});
 			}
 		}
+		// Spur für die Server-Logs, falls Angebote fehlen: Woher kamen die Kategorien, wie viele Einträge je Lauf.
+		console.warn(`[penny] Angebote Woche ${week}: Kategorien aus ${source} (${groups.length}, ${failed} nicht abrufbar), ${tiles} Einträge, ${byId.size} Angebote, ${unreadable} unlesbar${unreadableSample ? `, z. B. ${unreadableSample}` : ''}`);
 		if (byId.size === 0) {
 			throw new Error(`PENNY-Angebote (Woche ${week}): ${groups.length} Kategorien, ${failed} nicht abrufbar, ${tiles} Einträge davon ${unreadable} ohne lesbaren Titel/Preis.`);
 		}
