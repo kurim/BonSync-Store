@@ -64,6 +64,7 @@ const PAYMENT_LABEL_LINE = /^Bezahlung\s+(.+)$/i;
 const PAYMENT_AMOUNT_LINE = new RegExp(`^Betrag\\s+(${PRICE})\\s*EUR$`, 'i');
 const TAX_BREAKDOWN_EQUALS = new RegExp(`^([A-Z])=\\s*(\\d{1,2}(?:,\\d)?)\\s*%\\s+(${PRICE})\\s+(${PRICE})\\s+(${PRICE})$`);
 const TAX_BREAKDOWN_COLON = new RegExp(`^([A-Z])\\s+(\\d{1,2})%:\\s+(${PRICE})\\s+(${PRICE})\\s+(${PRICE})$`);
+const KONZESSIONAER = /^Konzession[aä]r:\s*(\S+)/i;
 const TSE_SIGNATURZAEHLER = /^(?:TSE-)?Signaturz[aä]hler:\s*(\d+)/i;
 const TSE_TRANSAKTION = /^TSE-Transaktion:\s*(\d+)/i;
 const TSE_START = /^(?:TSE-Start|Start):\s*(\S+)/i;
@@ -77,14 +78,22 @@ const LOYALTY_POINTS = /Sie\s+erhalten\s+\d+\s+Treuepunkt/i;
 export function parseReceiptMeta(lines: string[]): ReceiptMeta | null {
 	const meta: ReceiptMeta = { taxBreakdown: [] };
 	let pendingPaymentLabel: string | undefined;
+	let concession: string | undefined;
 
 	for (const rawLine of lines) {
 		const line = normalizeLine(rawLine);
 		if (!line) continue;
 
+		const konz = line.match(KONZESSIONAER);
+		if (konz) {
+			concession = konz[1];
+			continue;
+		}
+
 		const ustRewe = line.match(UST_ID_REWE);
 		if (ustRewe) {
-			meta.ustId = ustRewe[1];
+			// Shop-in-Shop-Belege nennen weiter unten die UID des Konzessionärs: die erste (Händler) behalten.
+			meta.ustId ??= ustRewe[1];
 			continue;
 		}
 		const ustRossmann = line.match(UST_ID_ROSSMANN);
@@ -119,7 +128,8 @@ export function parseReceiptMeta(lines: string[]): ReceiptMeta | null {
 				percent: parseFloat(taxEquals[2].replace(',', '.')),
 				netCents: parseAmountToCents(taxEquals[3]),
 				taxCents: parseAmountToCents(taxEquals[4]),
-				grossCents: parseAmountToCents(taxEquals[5])
+				grossCents: parseAmountToCents(taxEquals[5]),
+				...(concession && { concession })
 			});
 			continue;
 		}
@@ -130,7 +140,8 @@ export function parseReceiptMeta(lines: string[]): ReceiptMeta | null {
 				percent: parseFloat(taxColon[2]),
 				netCents: parseAmountToCents(taxColon[3]),
 				taxCents: parseAmountToCents(taxColon[4]),
-				grossCents: parseAmountToCents(taxColon[5])
+				grossCents: parseAmountToCents(taxColon[5]),
+				...(concession && { concession })
 			});
 			continue;
 		}
